@@ -1,1 +1,361 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Lotería Inteligente</title>
+
+  <meta name="theme-color" content="#0f172a" />
+  <link rel="manifest" href="manifest.json" />
+
+  <!-- iOS: “modo app” -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 16px; }
+    h1,h2 { margin: 8px 0; }
+    .bloque { margin: 10px 0; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    select, input, button { padding: 8px; font-size: 14px; }
+    button { cursor: pointer; }
+    pre { background: #0b1220; color: #e5e7eb; padding: 12px; border-radius: 10px; overflow:auto; white-space: pre-wrap; }
+    #estado { margin-top: 6px; }
+  </style>
+</head>
+
+<body>
+  <h1>🎲 Lotería inteligente</h1>
+
+  <div class="bloque">
+    <label><b>Importar histórico:</b></label>
+    <select id="juegoImport">
+      <option value="PRIMITIVA">Primitiva</option>
+      <option value="EURO">Euromillones</option>
+    </select>
+
+    <input id="file" type="file" accept=".csv">
+    <button id="btnImportar">Importar</button>
+    <button id="btnBorrarDB">Borrar históricos</button>
+  </div>
+
+  <p id="estado">Estado: esperando CSV…</p>
+
+  <hr>
+
+  <h2>🎯 Generador</h2>
+
+  <div class="bloque">
+    <label><b>Juego:</b></label>
+    <select id="juegoGen">
+      <option value="EURO">Euromillones (5 + 2)</option>
+      <option value="PRIMITIVA">Primitiva (6 + C)</option>
+    </select>
+
+    <label><b>Modo:</b></label>
+    <select id="modo">
+      <option value="HOT">🔥 Caliente</option>
+      <option value="COLD">❄️ Frío</option>
+      <option value="BAL">⚖️ Equilibrado</option>
+      <option value="MIX">🧪 Mixto</option>
+    </select>
+
+    <label><b>Intentos:</b></label>
+    <input id="intentos" type="number" min="2" max="200" value="10" style="width:80px;">
+  </div>
+
+  <div class="bloque">
+    <button id="btnGenerar">🏆 Mejor de N</button>
+    <button id="btnCopiar">📋 Copiar</button>
+    <button id="btnGuardarFav">⭐ Guardar</button>
+    <button id="btnLimpiar">🧹 Limpiar</button>
+  </div>
+
+  <pre id="salida"></pre>
+
+  <hr>
+
+  <h2>⭐ Favoritos</h2>
+  <div class="bloque">
+    <button id="btnVerFav">Ver</button>
+    <button id="btnExportFav">Exportar TXT</button>
+    <button id="btnBorrarFav">Borrar</button>
+  </div>
+
+  <pre id="favOut"></pre>
+
+  <!-- PapaParse -->
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+
+  <script>
+  /* ================= UTILIDADES ================= */
+  function pad2(n){ return String(n).padStart(2,"0"); }
+  function fmtList(arr){ return arr.map(pad2).join(" - "); }
+  function unique(a){ return [...new Set(a)]; }
+
+  function setEstado(t){ document.getElementById("estado").innerText="Estado: "+t; }
+  function out(t){ document.getElementById("salida").innerText=t; }
+  function outFav(t){ document.getElementById("favOut").innerText=t; }
+
+  function clean(x){ return String(x??"").trim().replace(/^"|"$/g,""); }
+
+  /* ================= STORAGE ================= */
+  function loadDB(){
+    return JSON.parse(localStorage.getItem("dbLoteria") || '{"PRIMITIVA":[],"EURO":[]}');
+  }
+  function saveDB(db){
+    localStorage.setItem("dbLoteria", JSON.stringify(db));
+  }
+
+  const FAV_KEY="favLoteria";
+  function loadFav(){ return JSON.parse(localStorage.getItem(FAV_KEY)||"[]"); }
+  function saveFav(f){ localStorage.setItem(FAV_KEY,JSON.stringify(f)); }
+
+  /* ================= CSV ================= */
+  function extraerNumeros(row){
+    const m=String(row).match(/\d+/g)||[];
+    return m.map(n=>parseInt(n,10)).filter(n=>!isNaN(n));
+  }
+
+  function importarCSV(){
+    const f=document.getElementById("file").files[0];
+    if(!f){ setEstado("elige CSV"); return; }
+
+    const juego=document.getElementById("juegoImport").value;
+
+    Papa.parse(f,{
+      skipEmptyLines:true,
+      complete:(res)=>{
+        const rows=res.data;
+        const db=loadDB();
+
+        if(juego==="PRIMITIVA") db.PRIMITIVA=[];
+        if(juego==="EURO") db.EURO=[];
+
+        let ok=0;
+
+        for(const r of rows){
+          const line=(Array.isArray(r)?r.join(" "):r);
+          const nums=extraerNumeros(line);
+
+          if(juego==="PRIMITIVA"){
+            const n=nums.filter(x=>x>=1&&x<=49);
+            if(n.length>=7){
+              const main=n.slice(0,6);
+              const comp=n.find(x=>!main.includes(x)) ?? n[6];
+              if(unique(main).length===6 && comp>=1 && comp<=49){
+                db.PRIMITIVA.push({numbers:main, extras:[comp]});
+                ok++;
+              }
+            }
+          } else {
+            const main=nums.filter(x=>x>=1&&x<=50).slice(0,5);
+            const star=nums.filter(x=>x>=1&&x<=12).slice(-2);
+            if(main.length===5 && star.length===2 && star[0]!==star[1]){
+              db.EURO.push({numbers:main, extras:star});
+              ok++;
+            }
+          }
+        }
+
+        saveDB(db);
+        setEstado("importados "+ok+" sorteos");
+      }
+    });
+  }
+
+  /* ================= FRECUENCIAS ================= */
+  function freqEuro(){
+    const d=loadDB().EURO;
+    const fM=Array(51).fill(0), fS=Array(13).fill(0);
+    d.forEach(x=>{
+      x.numbers.forEach(n=>fM[n]++);
+      x.extras.forEach(s=>fS[s]++);
+    });
+    return {fM,fS,count:d.length};
+  }
+
+  function freqPri(){
+    const d=loadDB().PRIMITIVA;
+    const fM=Array(50).fill(0), fC=Array(50).fill(0);
+    d.forEach(x=>{
+      x.numbers.forEach(n=>fM[n]++);
+      if(x.extras?.[0]) fC[x.extras[0]]++;
+    });
+    return {fM,fC,count:d.length};
+  }
+
+  /* ================= WEIGHTS ================= */
+  function buildWeights(freq,max,modo){
+    const w=Array(max+1).fill(1);
+    for(let i=1;i<=max;i++){
+      if(modo==="HOT") w[i]=freq[i]+1;
+      if(modo==="COLD") w[i]=1/(freq[i]+1);
+      if(modo==="BAL") w[i]=0.6*(freq[i]+1)+0.4*(1/(freq[i]+1));
+    }
+    return w;
+  }
+
+  function pick(max,count,w,banned){
+    const res=[];
+    const ban=banned||new Set();
+    while(res.length<count){
+      let sum=0, pool=[];
+      for(let i=1;i<=max;i++){
+        if(res.includes(i)||ban.has(i)) continue;
+        const ww=w[i]||0.0001;
+        pool.push([i,ww]); sum+=ww;
+      }
+      if(pool.length===0) return null;
+      let r=Math.random()*sum;
+      for(const [n,ww] of pool){
+        r-=ww; if(r<=0){ res.push(n); break; }
+      }
+    }
+    return res.sort((a,b)=>a-b);
+  }
+
+  /* ================= MEJOR DE N ================= */
+  let lastText="";
+
+  function generar(){
+    const juego=document.getElementById("juegoGen").value;
+    const modo=document.getElementById("modo").value;
+    const N=Math.max(2, Math.min(200, parseInt(document.getElementById("intentos").value||10,10)));
+
+    let best=null;
+
+    if(juego==="EURO"){
+      const {fM,fS,count}=freqEuro();
+      if(!count){ out("❌ No hay Euromillones cargados"); return; }
+
+      for(let i=0;i<N;i++){
+        let main,star;
+
+        if(modo==="MIX"){
+          const hot=pick(50,3,buildWeights(fM,50,"HOT"));
+          const cold=pick(50,2,buildWeights(fM,50,"COLD"),new Set(hot));
+          main=[...hot,...cold].sort((a,b)=>a-b);
+          star=pick(12,2,buildWeights(fS,12,"BAL"));
+        } else {
+          main=pick(50,5,buildWeights(fM,50,modo));
+          star=pick(12,2,buildWeights(fS,12,modo));
+        }
+
+        const score=
+          main.reduce((a,b)=>a+(fM[b]||0),0) +
+          star.reduce((a,b)=>a+(fS[b]||0),0);
+
+        if(!best||score>best.score) best={main,star,score};
+      }
+
+      const text=`🏆 Euromillones [${modo}] (mejor de ${N})\n${fmtList(best.main)} ⭐ ${fmtList(best.star)}`;
+      out(text); lastText=text;
+      return;
+    }
+
+    // PRIMITIVA
+    const {fM,fC,count}=freqPri();
+    if(!count){ out("❌ No hay Primitiva cargada"); return; }
+
+    for(let i=0;i<N;i++){
+      let main,comp;
+
+      if(modo==="MIX"){
+        const hot=pick(49,3,buildWeights(fM,49,"HOT"));
+        const cold=pick(49,3,buildWeights(fM,49,"COLD"),new Set(hot));
+        main=[...hot,...cold].sort((a,b)=>a-b);
+        comp=pick(49,1,buildWeights(fC,49,"BAL"),new Set(main))?.[0];
+      } else {
+        main=pick(49,6,buildWeights(fM,49,modo));
+        comp=pick(49,1,buildWeights(fC,49,modo),new Set(main))?.[0];
+      }
+
+      if(!main || comp==null) continue;
+
+      const score=main.reduce((a,b)=>a+(fM[b]||0),0)+(fC[comp]||0);
+      if(!best||score>best.score) best={main,comp,score};
+    }
+
+    const text=`🏆 Primitiva [${modo}] (mejor de ${N})\n${fmtList(best.main)} | C: ${pad2(best.comp)}`;
+    out(text); lastText=text;
+  }
+
+  /* ================= FAVORITOS ================= */
+  function guardarFav(){
+    if(!lastText){ setEstado("genera primero"); return; }
+    const f=loadFav();
+    f.unshift({t:new Date().toISOString(),text:lastText});
+    saveFav(f);
+    setEstado("guardado ⭐");
+    verFav();
+  }
+
+  function verFav(){
+    const f=loadFav();
+    if(!f.length){ outFav("Sin favoritos"); return; }
+    outFav(f.map((x,i)=>`${pad2(i+1)}) ${x.text}\n`).join("\n"));
+  }
+
+  function exportFav(){
+    const f=loadFav();
+    if(!f.length){ setEstado("sin favoritos"); return; }
+    const blob=new Blob([f.map(x=>x.text).join("\n\n")],{type:"text/plain;charset=utf-8"});
+    const a=document.createElement("a");
+    a.href=URL.createObjectURL(blob);
+    a.download="favoritos.txt";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  function borrarFav(){
+    localStorage.removeItem(FAV_KEY);
+    outFav("Favoritos borrados");
+    setEstado("favoritos borrados");
+  }
+
+  /* ================= ACCIONES ================= */
+  async function copiar(){
+    if(!lastText){ setEstado("nada que copiar"); return; }
+    try{
+      await navigator.clipboard.writeText(lastText);
+      setEstado("copiado ✅");
+    } catch {
+      setEstado("no pude copiar (permiso)");
+    }
+  }
+
+  function limpiar(){
+    out("");
+    setEstado("listo");
+  }
+
+  function borrarDB(){
+    localStorage.removeItem("dbLoteria");
+    setEstado("históricos borrados");
+    out("");
+  }
+
+  /* ================= EVENTOS ================= */
+  document.getElementById("btnImportar").onclick=importarCSV;
+  document.getElementById("btnGenerar").onclick=generar;
+  document.getElementById("btnCopiar").onclick=copiar;
+  document.getElementById("btnGuardarFav").onclick=guardarFav;
+  document.getElementById("btnVerFav").onclick=verFav;
+  document.getElementById("btnExportFav").onclick=exportFav;
+  document.getElementById("btnBorrarFav").onclick=borrarFav;
+  document.getElementById("btnLimpiar").onclick=limpiar;
+  document.getElementById("btnBorrarDB").onclick=borrarDB;
+
+  verFav();
+  </script>
+
+  <script>
+    // PWA: registrar Service Worker
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("./service-worker.js");
+    }
+  </script>
+</body>
+</html>
 
